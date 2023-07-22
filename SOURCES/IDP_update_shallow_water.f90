@@ -189,7 +189,9 @@ CONTAINS
     CASE('viscous')
        velocity = compute_velocity(un(:,:,stage_prime))
        CALL compute_dijL(un(:,:,stage_prime))
+       !===TEST
        !CALL smoothness(un(:,1,stage_prime),dijL,dijL)
+       !===TEST
        CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,lumped,diag,un(:,:,stage_prime))
        CALL sum_flux(FluxijL,rk)
        CALL divide_by_lumped(.true.,rk)
@@ -202,11 +204,11 @@ CONTAINS
        !===Low-order update
        velocity = compute_velocity(un(:,:,stage_prime))
        CALL compute_dijL(un(:,:,stage_prime))
-       !TEST
+       !===TEST
        !CALL smoothness(un(:,1,stage_prime),dijL,dijL)
        !CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,&
        !     lumped,diag,un(:,:,stage_prime),opt_utest=uhigh)
-       !TEST
+       !===TEST
        CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,&
             lumped,diag,un(:,:,stage_prime))
        DO comp = 1, inputs%syst_size
@@ -233,7 +235,7 @@ CONTAINS
        END DO
        !===TEST
        !dijH%aa = dijL%aa 
-       !dijH%aa=0.d0
+       dijH%aa=0.d0
        !CALL smoothness(un(:,1,stage_prime),dijL,dijH)
        !===TEST
        CALL add_visc_to_high_flux(dijH,fluxijH,ERK%inc_C(stage),un(:,:,stage_prime))
@@ -273,7 +275,6 @@ CONTAINS
        END DO
     END DO
   END SUBROUTINE compute_inviscid_high_order_flux
-
 
   SUBROUTINE sum_flux(Fluxij,rk)
     IMPLICIT NONE
@@ -365,7 +366,7 @@ CONTAINS
     INTEGER :: k, i, j, p
 
     !small_ent = inputs%gravity*inputs%max_water_h*inputs%htiny
-    small_ent = 1.d-10*inputs%gravity*inputs%max_water_h*inputs%max_water_h
+    small_ent = 1.d-2*inputs%gravity*inputs%max_water_h*inputs%max_water_h
     small_rescale = MAXVAL(ABS(cij(1)%aa))*small_ent
 
     scal = inputs%gravity*un(:,1)**2

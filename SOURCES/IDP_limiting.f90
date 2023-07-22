@@ -104,7 +104,6 @@ CONTAINS
           hmax(i) = MAX(hmax(i), ubarij(1))
           overhij = 2*MAX(ubarij(1),0.d0)/(ubarij(1)**2+MAX(ubarij(1),inputs%htiny)**2)
           vel2max(i) = MAX(vel2max(i),SUM(ubarij(2:k_dim+1)**2)*overhij**2)
-
        END DO
 
        IF (PRESENT(opt_utest)) THEN
@@ -113,6 +112,7 @@ CONTAINS
 
     END DO
     !TESTTTTTTTTTT
+    !WRITE(*,*) ' MAXVAL(vel2max)', MAXVAL(vel2max)
     if (PRESENT(opt_utest)) THEN
        DO i = 1, mesh%np
           IF (opt_utest(i,1) - hmin(i).lt. -1.d-5) THEN
@@ -313,6 +313,7 @@ CONTAINS
        lambdai = 1.d0/(lij%ia(i+1) - 1.d0 - lij%ia(i))
        coeff = 1.d0/(lambdai*lumped(i))
        IF (v2max(i)*ulow(i,1)**2 .LE. min_psi) THEN !===Zero kinetic energy
+          lij%aa(lij%ia(i):lij%ia(i+1) - 1) = 0.d0  !===Important for well-balancing
           CYCLE
        END IF
        DO p = lij%ia(i), lij%ia(i+1) - 1
