@@ -53,9 +53,9 @@ PROGRAM shallow_water
      !write(*,*) 'time ', inputs%time, inputs%dt,' Mass1', SUM(un(:,1)*lumped)
 
      IF (.true.) THEN
-        !IF (inputs%time + inputs%dt>inputs%Tfinal) THEN
-        !   inputs%dt=inputs%Tfinal-inputs%time
-        !END IF
+        IF (inputs%time + inputs%dt>inputs%Tfinal) THEN
+           inputs%dt=inputs%Tfinal-inputs%time
+        END IF
         !write(*,*) 'time ', inputs%time, inputs%dt
         CALL full_step_ERK(un)
         inputs%time = inputs%time + inputs%dt
@@ -125,7 +125,7 @@ CONTAINS
     CLOSE(10)                                                                       
   END SUBROUTINE write_restart
 
-  SUBROUTINE compute_errors
+  SUBROUTINE compute_errors_gauss
     IMPLICIT NONE
     REAL(KIND=8), DIMENSION(mesh%np) :: hh
     REAL(KIND=8), DIMENSION(k_dim,mesh%gauss%l_G*mesh%me):: rr_gauss
@@ -168,6 +168,44 @@ CONTAINS
     uexact = parameters%Bx*sol_anal(1,rr_gauss,inputs%time)
     norm = MAXVAL(ABS(uexact))
     WRITE(*,*) ' Relative Linfty error on Q       ', err/norm, err
+  END SUBROUTINE compute_errors_gauss
+
+  SUBROUTINE compute_errors
+    IMPLICIT NONE
+    REAL(KIND=8), DIMENSION(mesh%np)  :: hh
+    REAL(KIND=8), DIMENSION(mesh%np)  :: diff, uexact
+    REAL(KIND=8) :: err, norm
+
+    uexact = sol_anal(1,mesh%rr,inputs%time)
+    diff = un(:,1) - uexact
+    CALL ns_l1(mesh, diff, err)
+    CALL ns_l1(mesh, uexact, norm)
+    WRITE(*,*) ' Relative L1 error on h (interp)', err/norm, err
+
+
+    CALL ns_0(mesh, diff, err)
+    CALL ns_0(mesh, uexact, norm)
+    WRITE(*,*) ' Relative L2 error on h (interp)', err/norm, err
+
+    err = MAXVAL(ABS(diff))
+    norm = MAXVAL(ABS(uexact))
+    WRITE(*,*) ' Relative Linfty error on h     ', err/norm, err
+
+    diff = un(:,2) - sol_anal(2,mesh%rr,inputs%time)
+    CALL ns_l1(mesh, diff, err)
+    uexact = parameters%Bx*sol_anal(1,mesh%rr,inputs%time)
+    CALL ns_l1(mesh, uexact, norm)
+
+    WRITE(*,*) ' Relative L1 error on Q (interp)', (err)/(norm), (err)
+
+    CALL ns_0(mesh, diff, err)
+    uexact = parameters%Bx*sol_anal(1,mesh%rr,inputs%time)
+    CALL ns_0(mesh, uexact, norm)
+    WRITE(*,*) ' Relative L2 error on Q (interp)', (err)/(norm), (err)
+
+    err = MAXVAL(diff)
+    norm = MAXVAL(ABS(uexact))
+    WRITE(*,*) ' Relative Linfty error on Q     ', err/norm, err
   END SUBROUTINE compute_errors
 
   SUBROUTINE r_gauss(rr_gauss)

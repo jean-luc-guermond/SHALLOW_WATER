@@ -22,7 +22,7 @@ MODULE IDP_update_shallow_water
   REAL(KIND=8), DIMENSION(:,:,:), POINTER :: SiH
   REAL(KIND=8), DIMENSION(:,:),   POINTER :: SiL
   REAL(KIND=8), DIMENSION(:,:), POINTER :: velocity
- 
+
 CONTAINS 
 
   SUBROUTINE IDP_construct_shallow_water_matrices
@@ -35,8 +35,8 @@ CONTAINS
     INTEGER :: m, p, ni, nj, i, j, d, k, l
     REAL(KIND=8), DIMENSION(k_dim) :: x
     LOGICAL, DIMENSION(mesh%np) :: if_udotn_zero
- 
-    
+
+
     !===Mass
     CALL compute_mass(mesh,mass)
 
@@ -165,7 +165,8 @@ CONTAINS
     INTEGER  :: stage
     un(:,:,1) = un_in
     DO stage = 2, ERK%s+1
-       CALL one_stage_ERK(stage,un)
+       !CALL one_stage_ERK(stage,un)
+       CALL one_stage_modified_ERK(stage,un)
     END DO
     un_in = un(:,:,ERK%s+1)
   END SUBROUTINE full_step_ERK
@@ -198,7 +199,7 @@ CONTAINS
        un(:,:,stage) = un(:,:,stage_prime)+ERK%inc_C(stage)*inputs%dt*rk
        CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
        RETURN
-      
+
     CASE('high')
        !===Best result obtained without smoothness indicator (both low order and high order)
        !===Low-order update
@@ -221,10 +222,8 @@ CONTAINS
        !WRITE(*,*) ' test', MAXVAL(ABS(ulow-uhigh))
        !STOP
        !===TEST
-       
+
        !===High-order update
-       CALL compute_muijL
-       CALL entropy_residual(un(:,:,stage-1)) !===Entropy residual at stage-1
        CALL compute_inviscid_high_order_flux(un(:,:,stage-1),fluxij)
        DO comp = 1, inputs%syst_size
           fluxij_High(comp,stage-1)%aa = fluxij(comp)%aa
@@ -233,23 +232,29 @@ CONTAINS
              fluxijH(comp)%aa = fluxijH(comp)%aa+ERK%MatRK(stage,l)*fluxij_High(comp,l)%aa
           END DO
        END DO
+       CALL compute_muijL
+       CALL entropy_residual(un(:,:,stage-1)) !===Entropy residual at stage-1
+       !CALL smoothness(un(:,1,stage_prime),dijL,dijH)
+       !CALL entropy_commutator(un(:,:,stage-1))
+
        !===TEST
        !dijH%aa = dijL%aa 
-       dijH%aa=0.d0
-       !CALL smoothness(un(:,1,stage_prime),dijL,dijH)
+       !dijH%aa=0.d0
+
        !===TEST
        CALL add_visc_to_high_flux(dijH,fluxijH,ERK%inc_C(stage),un(:,:,stage_prime))
        CALL sum_flux(fluxijH,rk)
        CALL divide_by_lumped(inputs%if_lumped,rk)
        un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
        IF (inputs%if_convex_limiting) THEN
-           CALL convex_limiting_proc(velocity,un(:,:,stage_prime),ulow,un(:,:,stage),&
+          CALL convex_limiting_proc(velocity,un(:,:,stage_prime),ulow,un(:,:,stage),&
                FluxijH,FluxijL,mass,lumped,diag)
        END IF
        CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
        RETURN
     END SELECT
   END SUBROUTINE one_stage_ERK
+
 
   SUBROUTINE compute_inviscid_high_order_flux(un,fluxij)
     USE problem_setup
@@ -265,16 +270,54 @@ CONTAINS
              xx = 0.d0
              DO d = 1, k_dim
                 xx = xx - cij(d)%aa(p)*(velocity(j,d)*un(j,comp) + velocity(i,d)*un(i,comp))
-            END DO
-            fluxij(comp)%aa(p) = xx 
-            IF (comp.NE.1) THEN !===Hydrostatic pressure
-               fluxij(comp)%aa(p) = fluxij(comp)%aa(p)   &
-                    - cij(comp-1)%aa(p)*inputs%gravity*((un(j,1)**2 + un(i,1)**2)/2+un(i,1)*(bath(j)-bath(i)))    
+             END DO
+             fluxij(comp)%aa(p) = xx 
+             IF (comp.NE.1) THEN !===Hydrostatic pressure
+                !===Reference
+                !fluxij(comp)%aa(p) = fluxij(comp)%aa(p)   &
+                !     - cij(comp-1)%aa(p)*inputs%gravity*((un(j,1)**2 + un(i,1)**2)/2+un(i,1)*(bath(j)-bath(i)))
+                !===Reference
+                fluxij(comp)%aa(p) = fluxij(comp)%aa(p)   &
+                     - cij(comp-1)%aa(p)*inputs%gravity*(un(j,1)*un(i,1)+un(i,1)*(bath(j)-bath(i)))   
              END IF
           END DO
        END DO
     END DO
   END SUBROUTINE compute_inviscid_high_order_flux
+
+  SUBROUTINE compute_inviscid_high_order_flux_and_source(un,fluxij,Si)
+    USE problem_setup
+    IMPLICIT NONE
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size)  :: un, Si
+    TYPE(matrice_bloc), DIMENSION(:)                   :: fluxij
+    REAL(KIND=8), DIMENSION(inputs%syst_size) :: ss
+    REAL(KIND=8) :: xx
+    INTEGER :: i,j, p, comp, d
+    DO i = 1, mesh%np
+       ss =0.d0
+       DO p = dijH%ia(i), dijH%ia(i+1) - 1
+          j = dijH%ja(p)
+          DO comp = 1, inputs%syst_size
+             xx = 0.d0
+             DO d = 1, k_dim
+                xx = xx - cij(d)%aa(p)*(velocity(j,d)*un(j,comp) + velocity(i,d)*un(i,comp))
+             END DO
+             fluxij(comp)%aa(p) = xx 
+             IF (comp.NE.1) THEN !===Hydrostatic pressure
+                !===Reference
+                !fluxij(comp)%aa(p) = fluxij(comp)%aa(p)   &
+                !     - cij(comp-1)%aa(p)*inputs%gravity*((un(j,1)**2 + un(i,1)**2)/2)
+                !===Reference
+                fluxij(comp)%aa(p) = fluxij(comp)%aa(p)   &
+                     - cij(comp-1)%aa(p)*inputs%gravity*(un(j,1)*un(i,1))
+                ss(comp) = ss(comp) - cij(comp-1)%aa(p)*inputs%gravity*(un(i,1)*(bath(j)-bath(i)))
+             END IF
+          END DO
+       END DO
+       Si(i,:) = ss 
+    END DO
+  END SUBROUTINE compute_inviscid_high_order_flux_and_source
+
 
   SUBROUTINE sum_flux(Fluxij,rk)
     IMPLICIT NONE
@@ -338,8 +381,9 @@ CONTAINS
           DO comp = 1, inputs%syst_size
              !fluxij(comp)%aa(p) = fluxij(comp)%aa(p)+scalar*dij%aa(p)*(uu(j,comp)-uu(i,comp)) !===Very robust
              !fluxij(comp)%aa(p) = fluxij(comp)%aa(p)+scalar*muijH%aa(p)*(uu(j,comp)-uu(i,comp))
+             !===Reference
              fluxij(comp)%aa(p) = fluxij(comp)%aa(p)+scalar*dij%aa(p)*(uu(j,comp)*ratji-uu(i,comp)*ratij)
-             
+
              !fluxij(comp)%aa(p) = fluxij(comp)%aa(p) &
              !     +scalar*((dijH%aa(p)-muijH%aa(p))*(uu(j,comp)*ratji-uu(i,comp)*ratij) &
              !     + muijH%aa(p)*(uu(j,comp)-uu(i,comp)))
@@ -409,10 +453,10 @@ CONTAINS
     END DO
 
     res = ABS(res)/(rescale+small_rescale)
-    
-    !DO i = 1, mesh%np
-    !   IF (un(i,1).LE.inputs%htiny) res(i) = 1.d0 
-    !END DO
+
+    DO i = 1, mesh%np
+       IF (un(i,1).LE.inputs%htiny) res(i) = 1.d0 
+    END DO
 
     !===Thresholding is bad without limiting, subcritical test
     !res = threshold(res)
@@ -469,7 +513,7 @@ CONTAINS
     !stop
     RETURN
   END FUNCTION threshold
-  
+
   SUBROUTINE compute_dijL(un)
     USE mesh_handling
     USE shallow_water_functions
@@ -481,7 +525,7 @@ CONTAINS
     REAL(KIND=8)                                  :: norm_cij, lambda
     REAL(KIND=8), DIMENSION(k_dim)                :: nij, vell, velr
     REAL(KIND=8), DIMENSION(inputs%syst_size)     :: ul, ur
-     REAL(KIND=8), DIMENSION(mesh%np)             :: overh
+    REAL(KIND=8), DIMENSION(mesh%np)             :: overh
     REAL(KIND=8) :: Hstarij, Hstarji, ratij, ratji
 
     !===Viscosity using compute_lambda
@@ -496,14 +540,14 @@ CONTAINS
           ratji = Hstarji*overh(j)
           ul = un(i,:)*ratij
           ur = un(j,:)*ratji
-          
+
 !!$    DO i = 1, mesh%np
 !!$       ul = un(i,:)
 !!$       vell = velocity(i,:)
 !!$       DO p = dijL%ia(i), dijL%ia(i+1) - 1
 !!$          j = dijL%ja(p)
 !!$          ur = un(j,:)
-          
+
           velr = velocity(j,:)
           IF (i.NE.j) THEN
              DO d = 1, k_dim
@@ -519,13 +563,13 @@ CONTAINS
        END DO
     END DO
     CALL transpose_op(dijL,'max')
- 
+
     DO i = 1, mesh%np
        dijL%aa(diag(i)) = -SUM(dijL%aa(dijL%ia(i):dijL%ia(i+1)-1))
     END DO
     RETURN
   END SUBROUTINE compute_dijL
-  
+
   SUBROUTINE compute_muijL
     USE mesh_handling
     USE CSR_transpose
@@ -584,9 +628,9 @@ CONTAINS
           j = stiff%ja(p)
           IF (i==j) CYCLE
           num(i) = num(i)     + stiff%aa(p)*(waterh(i) - waterh(j))
-          denom(i) = denom(i) + abs(stiff%aa(p))*ABS(abs(waterh(i) + waterh(j))+inputs%htiny)
+          denom(i) = denom(i) + abs(stiff%aa(p))*ABS(abs(waterh(i) - waterh(j))+inputs%htiny)
        END DO
-       alpha(i) = ABS(num(i)/denom(i))
+       alpha(i) = ABS(num(i)/denom(i))**2
     END DO
     DO i = 1, mesh%np
        DO p = stiff%ia(i), stiff%ia(i+1) - 1
@@ -594,7 +638,8 @@ CONTAINS
           IF (i==j) THEN
              dij_out%aa(p) =0.d0
           ELSE
-             dij_out%aa(p) = ((alpha(i)+alpha(j))/2)**2*dij_in%aa(p)
+             !dij_out%aa(p) = ((alpha(i)+alpha(j))/2)*dij_in%aa(p)
+             dij_out%aa(p) = max(alpha(i),alpha(j))*dij_in%aa(p)
           END IF
        END DO
     END DO
@@ -603,6 +648,89 @@ CONTAINS
     END DO
   END SUBROUTINE smoothness
 
+  SUBROUTINE entropy_commutator(un)
+    USE mesh_handling
+    USE pardiso_solve
+    USE shallow_water_functions
+    USE sub_plot
+    IMPLICIT NONE
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size)       :: un
+    REAL(KIND=8), DIMENSION(mesh%np)                        :: scal, res, ent, rescale, minn, maxn
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size,k_dim) :: ff
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size)       :: Entprime
+    REAL(KIND=8), DIMENSION(mesh%np,k_dim)                  :: ent_flux
+    REAL(KIND=8) :: xx, yy, small_ent, small_rescale
+    INTEGER :: k, i, j, p
+
+    small_ent = 1.d-10*inputs%gravity*inputs%max_water_h*inputs%max_water_h
+    small_rescale = MAXVAL(ABS(cij(1)%aa))*small_ent
+
+    scal = inputs%gravity*un(:,1)**2
+    !scal = scal + inputs%gravity*un(:,1)*bath !===eta+ghz ***(entropy with bathymetry)
+    DO k = 1, k_dim
+       scal = scal + 0.5d0*velocity(:,k)*un(:,k+1)
+    END DO
+    ent =  scal - 0.5d0*inputs%gravity*un(:,1)**2 !===|v|^2 h/2 + g h^2/2
+
+    DO i = 1, mesh%np
+       maxn(i) = MAXVAL(ent(mass%ja(mass%ia(i):mass%ia(i+1)-1)))
+       minn(i) = MINVAL(ent(mass%ja(mass%ia(i):mass%ia(i+1)-1)))
+    END DO
+
+    DO k = 1, k_dim
+       ent_flux(:,k) = velocity(:,k)*scal !===v (v|^2 h/2 + g h^2); includes vhgz if entropy with bathymetry
+    END DO
+
+    Entprime(:,1) = inputs%gravity*un(:,1) !===-|v|^2/2 + g h 
+    !Entprime(:,1) = Entprime(:,1) + inputs%gravity*bath !=== + g z ***(entropy with bathymetry)
+    DO k = 1, k_dim 
+       Entprime(:,1) = Entprime(:,1) -0.5d0*velocity(:,k)**2 
+       Entprime(:,k+1) = velocity(:,k)  !===v
+    END DO
+
+    ff = flux(un)
+    DO k = 1, k_dim
+       ff(:,k+1,k) = ff(:,k+1,k) + 0.5d0*inputs%gravity*un(:,1)**2
+    END DO
+
+    res  = 0.d0
+    DO i = 1, mesh%np
+       xx=0.d0
+       DO p = mass%ia(i), mass%ia(i+1) - 1
+          j = mass%ja(p)
+          !yy = inputs%gravity*un(i,1)*bath(j) !===g h z ***(entropy with bathymetry)
+          DO k = 1, k_dim
+             !xx = xx - cij(k)%aa(p)*Entprime(i,k+1)*yy !=== h_i v.grad(z) ***(entropy with bathymetry)
+             xx = xx + cij(k)%aa(p)*(ent_flux(j,k)-SUM(Entprime(i,:)*ff(j,:,k)))
+          END DO
+       END DO
+       res(i) = res(i) + xx
+    END DO
+
+    !rescale =MAX(ABS(maxn-minn)/2, inputs%gravity*inputs%htiny**2)
+    !rescale =MAX(ABS(maxn-minn)/2,inputs%epsilon_htiny*maxn)
+    rescale =MAX(ABS(maxn-minn)/2, small_rescale)
+    res = ABS(res)/rescale
+
+    !res = threshold(res)
+
+    DO i = 1, mesh%np
+       DO p = mass%ia(i), mass%ia(i+1) - 1
+          j = mass%ja(p)
+          IF (i==j) CYCLE
+          dijH%aa(p) = dijL%aa(p)*min(1.d0,max(res(i),res(j)))
+       END DO
+    END DO
+    IF (inputs%time+inputs%dt.GE.inputs%Tfinal) THEN
+       SELECT CASE(k_dim)
+       CASE(1)
+          CALL plot_1d(mesh%rr(1,:),ABS(res),'res.plt')
+       CASE DEFAULT
+          CALL plot_scalar_field(mesh%jj, mesh%rr, ABS(res), 'res.plt')
+       END SELECT
+    END IF
+
+  END SUBROUTINE entropy_commutator
 
 
 
@@ -610,7 +738,6 @@ CONTAINS
 
 
 
-  
 
   !==========LEFTOVER
 
@@ -736,7 +863,35 @@ CONTAINS
     END DO
   END SUBROUTINE check_Hmin
 
-  !!$  SUBROUTINE compute_high_order_flux(un,fluxij)
+!!$    SUBROUTINE compute_inviscid_high_order_modified_flux(un,fluxij,Si)
+!!$    USE problem_setup
+!!$    IMPLICIT NONE
+!!$    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size)  :: un, Si
+!!$    TYPE(matrice_bloc), DIMENSION(:)                   :: fluxij
+!!$    REAL(KIND=8) :: xx
+!!$    INTEGER :: i,j, p, comp, d
+!!$    Si = 0.d0
+!!$    DO i = 1, mesh%np
+!!$       DO p = dijH%ia(i), dijH%ia(i+1) - 1
+!!$          j = dijH%ja(p)
+!!$          DO comp = 1, inputs%syst_size
+!!$             xx = 0.d0
+!!$             DO d = 1, k_dim
+!!$                xx = xx - cij(d)%aa(p)*(velocity(j,d)*un(j,comp) + velocity(i,d)*un(i,comp))
+!!$             END DO
+!!$             fluxij(comp)%aa(p) = xx 
+!!$             IF (comp.NE.1) THEN !===Hydrostatic pressure
+!!$               fluxij(comp)%aa(p) = fluxij(comp)%aa(p)   &
+!!$                    - cij(comp-1)%aa(p)*inputs%gravity*(un(j,1)**2 + un(i,1)**2)/2
+!!$               Si(i,comp) = Si(i,comp) - cij(comp-1)%aa(p)*inputs%gravity*un(i,1)*(bath(j)-bath(i)) 
+!!$             END IF
+!!$          END DO
+!!$       END DO
+!!$    END DO
+!!$  END SUBROUTINE compute_inviscid_high_order_modified_flux
+
+
+!!$  SUBROUTINE compute_high_order_flux(un,fluxij)
 !!$    USE problem_setup
 !!$    USE shallow_water_functions
 !!$    IMPLICIT NONE
@@ -939,6 +1094,129 @@ CONTAINS
 !!$       END DO
 !!$    END IF
 !!$  END SUBROUTINE high_sources
+
+  SUBROUTINE one_stage_modified_ERK(stage,un)
+    USE shallow_water_functions
+    USE IDP_limiting_shallow_water
+    IMPLICIT NONE
+    INTEGER, INTENT(IN) :: stage
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size,ERK%s+1) :: un
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size) :: rk, ulow, uhigh, SL, Source_shift
+    INTEGER :: comp, stage_prime
+    REAL(KIND=8) :: time_stage
+    INTEGER :: l
+    stage_prime = ERK%lp_of_l(stage)
+    time_stage = inputs%time+ERK%C(stage)*inputs%dt
+    SELECT CASE(inputs%method_type)
+    CASE('galerkin')
+       RETURN
+    CASE('viscous')
+       velocity = compute_velocity(un(:,:,stage_prime))
+       CALL compute_dijL(un(:,:,stage_prime))
+       !===TEST
+       !CALL smoothness(un(:,1,stage_prime),dijL,dijL)
+       !===TEST
+       CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,lumped,diag,un(:,:,stage_prime))
+       CALL sum_flux(FluxijL,rk)
+       CALL divide_by_lumped(.true.,rk)
+       un(:,:,stage) = un(:,:,stage_prime)+ERK%inc_C(stage)*inputs%dt*rk
+
+       CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
+       RETURN
+
+    CASE('test')
+       velocity = compute_velocity(un(:,:,stage_prime))
+       CALL compute_dijL(un(:,:,stage_prime))
+       !===TEST
+       !CALL smoothness(un(:,1,stage_prime),dijL,dijL)
+       !===TEST
+       !CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,lumped,diag,un(:,:,stage_prime))
+       CALL compute_bounds_and_low_flux_and_source(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,SL, &
+            lumped,diag,un(:,:,stage_prime))
+       CALL sum_flux(FluxijL,rk)
+       rk = rk + SL
+       CALL divide_by_lumped(.true.,rk)
+       un(:,:,stage) = un(:,:,stage_prime)+ERK%inc_C(stage)*inputs%dt*rk 
+
+       CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
+       RETURN
+
+    CASE('high')
+       !===Best result obtained without smoothness indicator (both low order and high order)
+       !===Low-order update
+       velocity = compute_velocity(un(:,:,stage_prime))
+       CALL compute_dijL(un(:,:,stage_prime))
+       !===TEST
+       !CALL smoothness(un(:,1,stage_prime),dijL,dijL)
+       !CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,&
+       !     lumped,diag,un(:,:,stage_prime),opt_utest=uhigh)
+       !===TEST
+       !CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,&
+       !     lumped,diag,un(:,:,stage_prime))
+       CALL compute_bounds_and_low_flux_and_source(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL, SL, &
+            lumped,diag,un(:,:,stage_prime))
+       DO comp = 1, inputs%syst_size
+          fluxijL(comp)%aa = ERK%inc_C(stage)*fluxijL(comp)%aa
+          SL(:,comp)=ERK%inc_C(stage)*SL(:,comp)
+       END DO
+       CALL sum_flux(FluxijL,rk)
+       rk = rk + SL
+       CALL divide_by_lumped(.true.,rk)
+       ulow = un(:,:,stage_prime)+inputs%dt*rk 
+       !===TEST
+       !WRITE(*,*) ' test', MAXVAL(ABS(ulow-uhigh))
+       !STOP
+       !un(:,:,stage) = ulow
+       !CALL bdy(un(:,:,stage),time_stage)
+       !return
+       !===TEST
+
+       !===High-order update
+       !CALL compute_inviscid_high_order_flux(un(:,:,stage-1),fluxij)
+       CALL compute_inviscid_high_order_flux_and_source(un(:,:,stage-1),fluxij, SiH(:,:,stage-1))
+       Source_shift = 0.d0
+       DO comp = 1, inputs%syst_size
+          fluxij_High(comp,stage-1)%aa = fluxij(comp)%aa
+          fluxijH(comp)%aa=0.d0
+          DO l = 1, stage-1
+             fluxijH(comp)%aa     = fluxijH(comp)%aa     + ERK%MatRK(stage,l)*fluxij_High(comp,l)%aa
+             Source_shift(:,comp) = Source_shift(:,comp) + ERK%MatRK(stage,l)*SiH(:,comp,l)
+          END DO
+       END DO
+       CALL compute_muijL
+       !CALL entropy_residual(un(:,:,stage-1)) !===Entropy residual at stage-1
+       CALL entropy_commutator(un(:,:,stage-1))
+       !===TEST
+       !dijH%aa = dijL%aa
+       !dijH%aa=0.d0
+       !CALL smoothness(un(:,1,stage_prime),dijL,dijH)
+       !===TEST
+       CALL add_visc_to_high_flux(dijH,fluxijH,ERK%inc_C(stage),un(:,:,stage_prime))
+       CALL sum_flux(fluxijH,rk)
+
+       rk = rk + Source_shift
+ 
+       CALL divide_by_lumped(inputs%if_lumped,rk)
+       un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
+       !===TEST
+       !CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
+       !return
+       !===TEST
+ 
+       IF (inputs%if_convex_limiting) THEN
+          Source_shift = Source_shift - SL
+          CALL convex_limiting_proc(velocity,un(:,:,stage_prime),ulow,un(:,:,stage),&
+               FluxijH,FluxijL,mass,lumped,diag)
+          CALL divide_by_lumped(.true.,source_shift)
+          un(:,:,stage) = un(:,:,stage) + inputs%dt*source_shift
+          !===TEST
+          un(:,:,stage) = ulow + inputs%dt*source_shift
+          !===TEST
+       END IF
+       CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
+       RETURN
+    END SELECT
+  END SUBROUTINE one_stage_modified_ERK
 
 
 END MODULE IDP_update_shallow_water
