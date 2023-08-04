@@ -8,7 +8,7 @@ MODULE IDP_limiting_shallow_water
   PUBLIC :: compute_bounds_and_low_flux, compute_bounds_and_low_flux_and_source, convex_limiting_proc
   PRIVATE
   LOGICAL :: once_bounds=.TRUE., once_limiting=.TRUE.
-  REAL(KIND=8), DIMENSION(:), POINTER   :: vel2max, hmin, hmax
+  REAL(KIND=8), DIMENSION(:), POINTER   :: vel2max, hmin, hmax, Kinmax, Q2max
   TYPE(matrice_bloc)                    :: mc_minus_ml, lij, stiff
   TYPE(matrice_bloc), DIMENSION(k_dim+1):: fctmat
   REAL(KIND=8), DIMENSION(:),   POINTER :: relaxi
@@ -31,7 +31,7 @@ CONTAINS
     INTEGER :: comp, d, i, j, p
 
     IF (once_bounds) THEN
-       ALLOCATE(hmin(mesh%np),hmax(mesh%np),vel2max(mesh%np))
+       ALLOCATE(hmin(mesh%np),hmax(mesh%np),vel2max(mesh%np),kinmax(mesh%np),Q2max(mesh%np))
        once_bounds=.FALSE.
     END IF
     overh = compute_one_over_h(un(:,1))
@@ -39,6 +39,8 @@ CONTAINS
     !===initialize bounds
     DO i = 1, mesh%np
        vel2max(i) =  SUM(velocity(i,:)**2)
+       Q2max(i) = SUM(un(i,2:k_dim+1)**2)
+       kinmax(i) = Q2max(i)*overh(i)
     END DO
     hmax = un(:,1)
     hmin = hmax
@@ -104,6 +106,8 @@ CONTAINS
           hmax(i) = MAX(hmax(i), ubarij(1))
           overhij = 2*MAX(ubarij(1),0.d0)/(ubarij(1)**2+MAX(ubarij(1),inputs%htiny)**2)
           vel2max(i) = MAX(vel2max(i),SUM(ubarij(2:k_dim+1)**2)*overhij**2)
+          Kinmax(i) = MAX(kinmax(i),SUM(ubarij(2:k_dim+1)**2)*overhij)
+          Q2max(i) = MAX(Q2max(i),SUM(ubarij(2:k_dim+1)**2))
        END DO
 
        IF (PRESENT(opt_utest)) THEN
@@ -148,7 +152,7 @@ CONTAINS
     INTEGER :: comp, d, i, j, p
 
     IF (once_bounds) THEN
-       ALLOCATE(hmin(mesh%np),hmax(mesh%np),vel2max(mesh%np))
+       ALLOCATE(hmin(mesh%np),hmax(mesh%np),vel2max(mesh%np),kinmax(mesh%np),Q2max(mesh%np))
        once_bounds=.FALSE.
     END IF
     overh = compute_one_over_h(un(:,1))
@@ -156,6 +160,8 @@ CONTAINS
     !===initialize bounds
     DO i = 1, mesh%np
        vel2max(i) =  SUM(velocity(i,:)**2)
+       Q2max(i) = SUM(un(i,2:k_dim+1)**2)
+       kinmax(i) = Q2max(i)*overh(i)
     END DO
     hmax = un(:,1)
     hmin = hmax
@@ -265,7 +271,7 @@ CONTAINS
     TYPE(matrice_bloc)                       :: mass
     TYPE(matrice_bloc), DIMENSION(:)         :: FluxijL, FluxijH
     REAL(KIND=8), DIMENSION(mesh%np)         :: lumped
-    REAL(KIND=8), DIMENSION(mesh%np)         :: vel2, lim
+    REAL(KIND=8), DIMENSION(mesh%np)         :: vel2, q2, kin, lim
     INTEGER,      DIMENSION(mesh%np)         :: diag
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size) :: du
     INTEGER :: k, it, i
@@ -303,10 +309,14 @@ CONTAINS
        CALL relax(0.d0,-x,un(:,1),hmin)
        CALL relax(1.d30,x,un(:,1),hmax)
        DO i = 1, mesh%np
-          vel2(i) = SUM(velocity(i,:)**2)
+          vel2(i) = SUM(velocity(i,:)**2) !=== v**2
+          q2(i) = SUM(un(i,2:k_dim)**2)   !=== q**2=v**2*h**2
+          kin(i) = SQRT(vel2(i)*q2(i))    !=== v*q=v**2*h
        END DO
        x=1.d0
        CALL relax(1.d30,x,vel2,vel2max)
+       CALL relax(1.d30,x,kin,kinmax)
+       CALL relax(1.d30,x,Q2,Q2max)
        !hmin = 0.d0
        !hmax = 1.d10
     END IF
@@ -327,10 +337,12 @@ CONTAINS
        !===Limit density
        CALL LOCAL_limit(ulow,hmax,hmin,fctmat(1),lumped,1,diag,lij)!===Works best
 
-       !===Limit  V_max^2 h^2 - Q^2
-       !CALL quadratic_limiting(ulow,lumped,vel2max)
-       !CALL newton_limiting(ulow,lumped)
-
+       !===Limit
+       !CALL limit_v2(ulow,vel2max,lumped)                !===(V^2)_max - Q^2/h^2
+       CALL quadratic_limiting(ulow,lumped,vel2max)    !===(V_^2)_max h^2 - Q^2
+       !CALL quadratic_kin_energy_limiting(ulow,lumped) !=== (V.Q)_max h - Q^2
+       !CALL quadratic_Q2_limiting(ulow,lumped)         !=== (Q^2)_max - Q^2
+ 
        !===Tranpose lij
        CALL transpose_op(lij,'min')
        !===TEST
@@ -436,7 +448,8 @@ CONTAINS
     REAL(KIND=8), DIMENSION(inputs%syst_size)  :: ur, Pij
     REAL(KIND=8) :: lambdai, psir, lr, a, b, c, delta, coeff, max_v2max, min_psi
     INTEGER      :: i, j, p, k
-    max_v2max = inputs%gravity*(inputs%max_water_h)**2 !===g (h_0)^2
+    !=== BUG max_v2max = inputs%gravity*(inputs%max_water_h)**2 !===g (h_0)^2
+    max_v2max = inputs%gravity*(inputs%max_water_h) !===g (h_0)
     min_psi = max_v2max*inputs%htiny**2 !===(g h_0^2)*(htiny)^2
     DO i = 1, mesh%np
        lambdai = 1.d0/(lij%ia(i+1) - 1.d0 - lij%ia(i))
@@ -474,6 +487,101 @@ CONTAINS
        END DO
     END DO
   END SUBROUTINE quadratic_limiting
+
+  SUBROUTINE quadratic_kin_energy_limiting(ulow,lumped)
+    USE mesh_handling
+    IMPLICIT NONE
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size), INTENT(IN) :: ulow
+    REAL(KIND=8), DIMENSION(mesh%np)                     :: lumped
+    REAL(KIND=8), DIMENSION(inputs%syst_size)  :: ur, Pij
+    REAL(KIND=8) :: lambdai, psir, lr, a, b, c, delta, coeff, v2max, min_psi
+    INTEGER      :: i, j, p, k
+    v2max = inputs%gravity*inputs%max_water_h !===g * h_0
+    min_psi = v2max*inputs%htiny**2 !===(g h_0)*(htiny)^2
+    DO i = 1, mesh%np
+       lambdai = 1.d0/(lij%ia(i+1) - 1.d0 - lij%ia(i))
+       coeff = 1.d0/(lambdai*lumped(i))
+       IF (kinmax(i)*ulow(i,1) .LE. min_psi) THEN !===Zero kinetic energy
+          lij%aa(lij%ia(i):lij%ia(i+1) - 1) = 0.d0  !===Important for well-balancing
+          CYCLE
+       END IF
+       DO p = lij%ia(i), lij%ia(i+1) - 1
+          j =  lij%ja(p)
+          IF (i==j) THEN
+             lij%aa(p) = 0.d0
+             CYCLE
+          END IF
+          lr = lij%aa(p) !===Use previous limiter
+          DO k = 1, inputs%syst_size
+             Pij(k) = fctmat(k)%aa(p)*coeff
+             ur(k) = ulow(i,k) + lr*Pij(k)
+          END DO
+          psir = kinmax(i)*ur(1) - SUM(ur(2:k_dim+1)**2) !=== Kmax H - ||Q||^2
+          IF (psir.GE.0.d0) THEN
+             CYCLE
+          END IF
+
+          a = -SUM(Pij(2:k_dim+1)**2) !===a is negative
+          b = kinmax(i)*Pij(1) - 2*SUM(Pij(2:k_dim+1)*ulow(i,2:k_dim+1))
+          c = kinmax(i)*ulow(i,1) - SUM(ulow(i,2:k_dim+1)**2)
+          delta = b**2 - 4*a*c
+          IF (delta<0.d0 .OR. a .GE. 0.d0) THEN
+             CYCLE
+          ELSE
+             lr = MAX(0.d0,(-b-SQRT(delta))/(2*a))
+             lij%aa(p) = MIN(lr,lij%aa(p))
+          END IF
+       END DO
+    END DO
+  END SUBROUTINE quadratic_kin_energy_limiting
+
+  SUBROUTINE quadratic_Q2_limiting(ulow,lumped)
+    USE mesh_handling
+    IMPLICIT NONE
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size), INTENT(IN) :: ulow
+    REAL(KIND=8), DIMENSION(mesh%np)                     :: lumped
+    REAL(KIND=8), DIMENSION(inputs%syst_size)  :: ur, Pij
+    REAL(KIND=8) :: lambdai, psir, lr, a, b, c, delta, coeff, v2max, min_psi
+    INTEGER      :: i, j, p, k
+    v2max = inputs%gravity*inputs%max_water_h !===g * h_0
+    min_psi = v2max*inputs%htiny**2 !===(g h_0)*(htiny)^2
+    DO i = 1, mesh%np
+       lambdai = 1.d0/(lij%ia(i+1) - 1.d0 - lij%ia(i))
+       coeff = 1.d0/(lambdai*lumped(i))
+       IF (Q2max(i) .LE. min_psi) THEN !===Zero kinetic energy
+          lij%aa(lij%ia(i):lij%ia(i+1) - 1) = 0.d0  !===Important for well-balancing
+          CYCLE
+       END IF
+       DO p = lij%ia(i), lij%ia(i+1) - 1
+          j =  lij%ja(p)
+          IF (i==j) THEN
+             lij%aa(p) = 0.d0
+             CYCLE
+          END IF
+          lr = lij%aa(p) !===Use previous limiter
+          DO k = 1, inputs%syst_size
+             Pij(k) = fctmat(k)%aa(p)*coeff
+             ur(k) = ulow(i,k) + lr*Pij(k)
+          END DO
+          psir = Q2max(i) - SUM(ur(2:k_dim+1)**2) !=== Q2max - ||Q||^2
+          IF (psir.GE.0.d0) THEN
+             CYCLE
+          END IF
+
+          a = -SUM(Pij(2:k_dim+1)**2) !===a is negative
+          b = -2*SUM(Pij(2:k_dim+1)*ulow(i,2:k_dim+1))
+          c = Q2max(i) - SUM(ulow(i,2:k_dim+1)**2)
+          delta = b**2 - 4*a*c
+          IF (delta<0.d0 .OR. a.GE.0.d0) THEN
+             CYCLE
+          ELSE
+             lr = MAX(0.d0,(-b-SQRT(delta))/(2*a))
+             lij%aa(p) = MIN(lr,lij%aa(p))
+          END IF
+       END DO
+    END DO
+  END SUBROUTINE quadratic_Q2_limiting
+
 
   SUBROUTINE relax(global_bound,pm,func,bound)
     IMPLICIT NONE
@@ -539,6 +647,92 @@ CONTAINS
     END IF
 
   END SUBROUTINE RELAX
+
+  SUBROUTINE limit_v2(ulow,v2m,lumped)
+    IMPLICIT NONE
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size), INTENT(IN) :: ulow
+    REAL(KIND=8), DIMENSION(mesh%np)                     :: v2m
+    REAL(KIND=8), DIMENSION(mesh%np)                     :: lumped
+    REAL(KIND=8), DIMENSION(inputs%syst_size)  :: ul, ur, Pij
+    REAL(KIND=8) :: lambdai, coeff, psir, psil, ll, lr, llold, lrold, psi_small
+    INTEGER      :: i, j, p, k
+    psi_small = inputs%gravity*inputs%htiny !===g (h_0)
+    !===
+    DO i = 1, mesh%np
+       lambdai = 1.d0/(lij%ia(i+1) - 1 - lij%ia(i))
+       coeff = 1.d0/(lambdai*lumped(i))
+
+       DO p = lij%ia(i), lij%ia(i+1) - 1
+          j =  lij%ja(p)
+          IF (i==j) THEN
+             lij%aa(p) = 0.d0
+             CYCLE
+          END IF
+          lr = lij%aa(p)
+          DO k = 1, inputs%syst_size
+             Pij(k) = fctmat(k)%aa(p)*coeff
+             ur(k) = ulow(i,k) + lr*Pij(k) !===Density must be positive
+          END DO
+          if (ur(1)<0.d0) then
+             lij%aa(p) = 0.d0  !===CFL is too large
+             CYCLE
+          end if
+          psir = psi_func(ur,v2m(i))
+          IF (psir.GE.-psi_small) THEN
+             lij%aa(p) = lij%aa(p)
+             CYCLE
+          END IF
+          ll = 0.d0
+          ul = ulow(i,:)
+          psil = psi_func(ul,v2m(i))
+          DO WHILE (ABS(psil-psir) .GT. psi_small)
+             llold = ll
+             lrold = lr
+             ll = ll - psil*(lr-ll)/(psir-psil)
+             lr = lr - psir/psi_prime_func(Pij,lr,psir,ur,v2m(i))
+             IF (ll.GE.lr) THEN
+                ll = lr !lold
+                EXIT
+             END IF
+             IF (ll< llold) THEN
+                ll = llold
+                EXIT
+             END IF
+             IF (lr > lrold) THEN
+                lr = lrold
+                EXIT
+             END IF
+             ul = ulow(i,:) + ll*Pij
+             ur = ulow(i,:) + lr*Pij
+             psil = psi_func(ul,v2m(i))
+             psir = psi_func(ur,v2m(i))
+          END DO
+          IF (psir.GE.-psi_small) THEN
+             lij%aa(p) = lr
+          ELSE
+             lij%aa(p) = ll
+          END IF
+       END DO
+    END DO
+  CONTAINS
+    FUNCTION psi_func(u,v2m) RESULT(psi)
+      IMPLICIT NONE
+      REAL(KIND=8), DIMENSION(inputs%syst_size), INTENT(IN) :: u
+      REAL(KIND=8),                     INTENT(IN) :: v2m
+      REAL(KIND=8)                                 :: psi
+      psi = v2m - SUM(u(2:inputs%syst_size)**2)*(2/(u(1)**2 + max(u(1),inputs%htiny)**2))
+    END FUNCTION psi_func
+    FUNCTION psi_prime_func(Pij,lr,psir,ur,V2m) RESULT(psi)
+    IMPLICIT NONE
+    REAL(KIND=8), DIMENSION(inputs%syst_size), INTENT(IN) :: ur, Pij
+    REAL(KIND=8),                              INTENT(IN) :: lr, psir, V2m
+    REAL(KIND=8)                                 :: psi
+    REAL(KIND=8), DIMENSION(inputs%syst_size)    :: up
+    REAL(KIND=8), PARAMETER :: eps=1.d-7
+    up = ur - eps*Pij
+    psi = (psir-psi_func(up,V2m))/eps
+  END FUNCTION psi_prime_func
+  END SUBROUTINE limit_v2
 
 !!$
 !!$     SUBROUTINE compute_bounds_and_low_modified_flux(dt,velocity,dijL,cij,FluxijL, SiL, lumped,diag,un,opt_utest)
