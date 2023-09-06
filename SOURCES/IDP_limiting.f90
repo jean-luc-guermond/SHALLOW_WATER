@@ -339,7 +339,7 @@ CONTAINS
 
        !===Limit
        !CALL limit_v2(ulow,vel2max,lumped)                !===(V^2)_max - Q^2/h^2
-       CALL quadratic_limiting(ulow,lumped,vel2max)    !===(V_^2)_max h^2 - Q^2
+       !CALL quadratic_limiting(ulow,lumped,vel2max)    !===(V_^2)_max h^2 - Q^2
        !CALL quadratic_kin_energy_limiting(ulow,lumped) !=== (V.Q)_max h - Q^2
        !CALL quadratic_Q2_limiting(ulow,lumped)         !=== (Q^2)_max - Q^2
  
