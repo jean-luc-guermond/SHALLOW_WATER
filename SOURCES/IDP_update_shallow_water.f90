@@ -11,7 +11,6 @@ MODULE IDP_update_shallow_water
   TYPE(BT), PUBLIC :: ERK
   REAL(KIND=8), DIMENSION(:), POINTER, PUBLIC :: lumped
   PRIVATE
-
   INTEGER, DIMENSION(:), POINTER      :: diag
   TYPE(matrice_bloc)                  :: mass
   TYPE(matrice_bloc), DIMENSION(k_dim)  :: cij
@@ -22,6 +21,7 @@ MODULE IDP_update_shallow_water
   REAL(KIND=8), DIMENSION(:,:,:), POINTER :: SiH
   REAL(KIND=8), DIMENSION(:,:),   POINTER :: SiL
   REAL(KIND=8), DIMENSION(:,:), POINTER :: velocity
+  CHARACTER(LEN=4) :: dispersion_correction='high'
 
 CONTAINS 
 
@@ -165,8 +165,14 @@ CONTAINS
     INTEGER  :: stage
     un(:,:,1) = un_in
     DO stage = 2, ERK%s+1
-       !CALL one_stage_ERK(stage,un)
-       CALL one_stage_modified_ERK(stage,un)
+       CALL one_stage_ERK(stage,un)
+       !===Run with
+       !inputs%epsilon_tiny     = 1.d-8
+       !entropy_commutator(un(:,:,stage-1))
+       !it_max_limiting = 2
+       !quadratic_kin_energy_limiting(ulow,lumped) !=== (V.Q)_max h - Q^2
+       
+       !CALL one_stage_modified_ERK(stage,un)
     END DO
     un_in = un(:,:,ERK%s+1)
   END SUBROUTINE full_step_ERK
@@ -239,18 +245,26 @@ CONTAINS
        
        CALL add_visc_to_high_flux(dijH,fluxijH,ERK%inc_C(stage),un(:,:,stage_prime))
        CALL sum_flux(fluxijH,rk)
-       CALL divide_by_lumped(inputs%if_lumped,rk)
-       un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
+
        IF (inputs%if_convex_limiting) THEN
+          IF (dispersion_correction=='high') THEN
+             CALL divide_by_lumped(inputs%if_lumped,rk)
+             un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
+          ELSE
+             un(:,:,stage) = ulow
+          END IF
           CALL convex_limiting_proc(velocity,un(:,:,stage_prime),ulow,un(:,:,stage),&
                FluxijH,FluxijL,mass,lumped,diag)
+       ELSE
+          CALL divide_by_lumped(inputs%if_lumped,rk)
+          un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
        END IF
        CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
        RETURN
     END SELECT
   END SUBROUTINE one_stage_ERK
 
-    SUBROUTINE one_stage_modified_ERK(stage,un)
+  SUBROUTINE one_stage_modified_ERK(stage,un)
     USE shallow_water_functions
     USE IDP_limiting_shallow_water
     IMPLICIT NONE
@@ -324,23 +338,32 @@ CONTAINS
              Source_shift(:,comp) = Source_shift(:,comp) + ERK%MatRK(stage,l)*SiH(:,comp,l)
           END DO
        END DO
-       CALL entropy_residual(un(:,:,stage-1)) !===Entropy residual at stage-1
-       !CALL entropy_commutator(un(:,:,stage-1))
+       !CALL entropy_residual(un(:,:,stage-1)) !===Entropy residual at stage-1
+       CALL entropy_commutator(un(:,:,stage-1))
        !===TEST
        !CALL smoothness(un(:,1,stage_prime),dijL,dijH)
        !===TEST
        CALL add_visc_to_high_flux(dijH,fluxijH,ERK%inc_C(stage),un(:,:,stage_prime))
        CALL sum_flux(fluxijH,rk)
-       rk = rk + Source_shift
-       CALL divide_by_lumped(inputs%if_lumped,rk)
-       un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
-
-       IF (inputs%if_convex_limiting) THEN
+       IF (inputs%if_convex_limiting) THEN          
+          IF (dispersion_correction=='high') THEN
+             rk = rk + Source_shift
+             CALL divide_by_lumped(inputs%if_lumped,rk)
+             un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
+          ELSE
+             un(:,:,stage) = ulow
+          END IF
           Source_shift = Source_shift - SL
+          !CALL convex_limiting_proc(velocity,un(:,:,stage_prime),ulow,un(:,:,stage),&
+          !     FluxijH,FluxijL,mass,lumped,diag,opt_src_shift=Source_shift)
           CALL convex_limiting_proc(velocity,un(:,:,stage_prime),ulow,un(:,:,stage),&
-               FluxijH,FluxijL,mass,lumped,diag)
+              FluxijH,FluxijL,mass,lumped,diag)
           CALL divide_by_lumped(.true.,source_shift)
           un(:,:,stage) = un(:,:,stage) + inputs%dt*source_shift
+       ELSE
+          rk = rk + Source_shift
+          CALL divide_by_lumped(inputs%if_lumped,rk)
+          un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
        END IF
        CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
        RETURN
@@ -590,19 +613,19 @@ CONTAINS
     USE sub_plot
     IMPLICIT NONE
     REAL(KIND=8), DIMENSION(mesh%np)  :: x, z, t, zp, relu, f, g
-    !REAL(KIND=8), PARAMETER :: x0 = 0.1d0, x1=SQRT(3.d0)*x0 !x0=0.05 good for P1 (qudratic threshold)
-    REAL(KIND=8), PARAMETER :: x0 = 0.2d0 !x0=0.1 (cubic threshold)
-    !integer :: i
-    !do i = 1, mesh%np
-    !   x(i) = (i-1.d0)/mesh%np
-    !end do
+!!$    REAL(KIND=8), PARAMETER :: x0 = 0.1d0, x1=SQRT(3.d0)*x0 !x0=0.05 good for P1 (qudratic threshold)
+    REAL(KIND=8), PARAMETER :: x0 = 0.015d0 !x0=0.1 (cubic threshold)
+!!$    !integer :: i
+!!$    !do i = 1, mesh%np
+!!$    !   x(i) = (i-1.d0)/mesh%np
+!!$    !end do
 !!$    !===Quadratic threshold
 !!$    z = x-x0
 !!$    zp = x-2*x0
 !!$    relu = (zp+abs(zp))/2
 !!$    f = -z*(z**2-x1**2)  + relu*(z-x0)*(z+2*x0)
 !!$    g = (f + 2*x0**3)/(4*x0**3)
-!!$    CALL plot_1d(x,g,'threshold1.plt') 
+!!$    !!CALL plot_1d(x,g,'threshold1.plt') 
 !!$
 !!$    !===Cubic threshold
     relu = ((x-2*x0)+abs(x-2*x0))/2
@@ -649,7 +672,7 @@ CONTAINS
              nij=nij/norm_cij
              CALL compute_lambda_vacc(ul,ur,vell,velr,nij,lambda)
              dijL%aa(p) = norm_cij*lambda
-          ELSE
+             ELSE
              dijL%aa(p) = 0.d0
           END IF
        END DO
@@ -797,13 +820,18 @@ CONTAINS
           END DO
        END DO
        res(i) = res(i) + xx
+ 
     END DO
 
     !rescale =MAX(ABS(maxn-minn)/2, inputs%gravity*inputs%htiny**2)
     !rescale =MAX(ABS(maxn-minn)/2,inputs%epsilon_htiny*maxn)
     rescale =MAX(ABS(maxn-minn)/2, small_rescale)
     res = ABS(res)/rescale
-
+    !===TEST
+    !DO i = 1, mesh%np
+    !   if (un(i,1).LE. inputs%htiny) res(i)=1.d0
+    !END DO
+    !===TEST
     !res = threshold(res)
 
     DO i = 1, mesh%np

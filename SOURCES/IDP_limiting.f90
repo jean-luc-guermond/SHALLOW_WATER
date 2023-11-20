@@ -261,7 +261,7 @@ CONTAINS
 
 
   SUBROUTINE convex_limiting_proc(velocity,un,ulow,unext,FluxijH,FluxijL,&
-       mass,lumped,diag)
+       mass,lumped,diag,opt_src_shift)
     USE space_dim
     USE st_matrix
     USE CSR_transpose
@@ -271,10 +271,11 @@ CONTAINS
     TYPE(matrice_bloc)                       :: mass
     TYPE(matrice_bloc), DIMENSION(:)         :: FluxijL, FluxijH
     REAL(KIND=8), DIMENSION(mesh%np)         :: lumped
+    REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size),OPTIONAL:: opt_src_shift
     REAL(KIND=8), DIMENSION(mesh%np)         :: vel2, q2, kin, lim
     INTEGER,      DIMENSION(mesh%np)         :: diag
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size) :: du
-    INTEGER :: k, it, i
+    INTEGER :: k, it, i, ps, pe
     REAL(KIND=8) :: x
     INTEGER :: mm(1)
     REAL(KIND=8) :: DD
@@ -338,11 +339,11 @@ CONTAINS
        CALL LOCAL_limit(ulow,hmax,hmin,fctmat(1),lumped,1,diag,lij)!===Works best
 
        !===Limit
-       !CALL limit_v2(ulow,vel2max,lumped)                !===(V^2)_max - Q^2/h^2
+       !CALL limit_v2(ulow,vel2max,lumped)              !===(V^2)_max - Q^2/h^2
        !CALL quadratic_limiting(ulow,lumped,vel2max)    !===(V_^2)_max h^2 - Q^2
-       !CALL quadratic_kin_energy_limiting(ulow,lumped) !=== (V.Q)_max h - Q^2
+       CALL quadratic_kin_energy_limiting(ulow,lumped) !=== (V.Q)_max h - Q^2
        !CALL quadratic_Q2_limiting(ulow,lumped)         !=== (Q^2)_max - Q^2
- 
+
        !===Tranpose lij
        CALL transpose_op(lij,'min')
        !===TEST
@@ -353,8 +354,19 @@ CONTAINS
        DO k = 1, inputs%syst_size
           fctmat(k)%aa = (1-lij%aa)*fctmat(k)%aa
        END DO
+       IF (present(opt_Src_shift)) THEN
+          lij%aa(diag)=1.d0
+          DO i = 1, mesh%np
+             ps = lij%ia(i)
+             pe = lij%ia(i+1)-1
+             opt_Src_shift(i,:) = opt_Src_shift(i,:)*MINVAL(lij%aa(ps:pe))
+          END DO
+       END IF
     END DO
     unext = ulow
+
+
+
     !===End of computation
 
   END SUBROUTINE convex_limiting_proc
