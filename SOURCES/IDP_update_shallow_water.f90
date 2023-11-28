@@ -391,7 +391,7 @@ CONTAINS
                 !     - cij(comp-1)%aa(p)*inputs%gravity*((un(j,1)**2 + un(i,1)**2)/2+un(i,1)*(bath(j)-bath(i)))
                 !===Reference
                 fluxij(comp)%aa(p) = fluxij(comp)%aa(p)   &
-                     - cij(comp-1)%aa(p)*inputs%gravity*(un(j,1)*un(i,1)+un(i,1)*(bath(j)-bath(i)))
+                     - cij(comp-1)%aa(p)*inputs%gravity*(un(i,1)*un(j,1)+un(i,1)*(bath(j)-bath(i)))
                 !===Reference
              END IF
           END DO
@@ -509,16 +509,12 @@ CONTAINS
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size,k_dim) :: ff
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size)       :: Entprime
     REAL(KIND=8), DIMENSION(mesh%np,k_dim)                  :: ent_flux
-    REAL(KIND=8) :: xx, yy, aa, bb, small_ent, small_rescale
+    REAL(KIND=8) :: xx, yy, aa, bb, small_ent, small_rescale, global_rescale
     INTEGER :: k, i, j, p
 
-    !small_ent = inputs%gravity*inputs%htiny*inputs%htiny
-    !small_ent = inputs%gravity*inputs%max_water_h*inputs%htiny
-    small_ent = 1.d-2*inputs%gravity*inputs%max_water_h*inputs%max_water_h
-    !===TEST
-    !small_ent = 1.d-10*inputs%gravity*inputs%max_water_h*inputs%max_water_h
-    !===TEST
-    small_rescale = MAXVAL(ABS(cij(1)%aa))*small_ent
+    small_ent =(inputs%gravity*inputs%max_water_h)**(1.5)*inputs%max_water_h
+    global_rescale = MAXVAL(ABS(cij(1)%aa))*small_ent
+    small_rescale = inputs%epsilon_tiny*global_rescale
     
     scal = inputs%gravity*un(:,1)**2
     !scal = scal + inputs%gravity*un(:,1)*bath !===eta+ghz ***(entropy with bathymetry)
@@ -526,13 +522,6 @@ CONTAINS
        scal = scal + 0.5d0*velocity(:,k)*un(:,k+1)
     END DO
     ent =  scal - 0.5d0*inputs%gravity*un(:,1)**2 !===|v|^2 h/2 + g h^2/2
-
-    !===TEST
-    DO i = 1, mesh%np
-       maxn(i) = MAXVAL(ent(mass%ja(mass%ia(i):mass%ia(i+1)-1)))
-       minn(i) = MINVAL(ent(mass%ja(mass%ia(i):mass%ia(i+1)-1)))
-    END DO
-    !===TEST
 
     DO k = 1, k_dim
        ent_flux(:,k) = velocity(:,k)*scal !===v (|v|^2 h/2 + g h^2); includes vhgz if entropy with bathymetry
@@ -565,14 +554,7 @@ CONTAINS
        res(i) = aa + bb
        rescale(i) = ABS(aa)+ABS(bb)
     END DO
-
     res = ABS(res)/(rescale+small_rescale)
-
-    !===TEST
-    !rescale =MAX(ABS(maxn-minn)/2, small_rescale)
-    !res = ABS(res)/rescale
-    !===TEST
-
  
     !DO i = 1, mesh%np
     !   IF (un(i,1).LE.inputs%htiny) res(i) = 1.d0 
@@ -586,14 +568,8 @@ CONTAINS
        DO p = dijL%ia(i), dijL%ia(i+1) - 1
           j = dijL%ja(p)
           IF (i==j) CYCLE
-          !===Average is not robust wrt dry states in paraboloid test, but good for accuracy in subcritical test
-          !dijH%aa(p) = dijL%aa(p)*(res(i)+res(j))/2
-          !dijH%aa(p)  = dijL%aa(p)*max(res(i),res(j))
-          !dijH%aa(p) = muijL%aa(p)*max(res(i),res(j))
-          !dijH%aa(p) = muijL%aa(p)*(res(i)+res(j))/2
-          !===!TEST
-          dijH%aa(p) = dijL%aa(p)*min(1.d0,max(res(i),res(j)))
-          !===TEST
+          !dijH%aa(p) = dijL%aa(p)*min(1.d0,max(res(i),res(j)))
+          dijH%aa(p) = dijL%aa(p)*min(1.d0,(res(i)+res(j))/2)
        END DO
     END DO
 
@@ -613,24 +589,24 @@ CONTAINS
     USE sub_plot
     IMPLICIT NONE
     REAL(KIND=8), DIMENSION(mesh%np)  :: x, z, t, zp, relu, f, g
-!!$    REAL(KIND=8), PARAMETER :: x0 = 0.1d0, x1=SQRT(3.d0)*x0 !x0=0.05 good for P1 (qudratic threshold)
-    REAL(KIND=8), PARAMETER :: x0 = 0.015d0 !x0=0.1 (cubic threshold)
-!!$    !integer :: i
-!!$    !do i = 1, mesh%np
-!!$    !   x(i) = (i-1.d0)/mesh%np
-!!$    !end do
-!!$    !===Quadratic threshold
-!!$    z = x-x0
-!!$    zp = x-2*x0
-!!$    relu = (zp+abs(zp))/2
-!!$    f = -z*(z**2-x1**2)  + relu*(z-x0)*(z+2*x0)
-!!$    g = (f + 2*x0**3)/(4*x0**3)
-!!$    !!CALL plot_1d(x,g,'threshold1.plt') 
-!!$
-!!$    !===Cubic threshold
-    relu = ((x-2*x0)+abs(x-2*x0))/2
-    t = x/(2*x0)
-    g = t**3*(10-15*t+6*t**2) - relu*(t-1)**2*(6*t**2+3*t+1)/(2*x0)
+    REAL(KIND=8), PARAMETER :: x0 = 0.05d0, x1=SQRT(3.d0)*x0 !x0=0.05 good for P1 (qudratic threshold)
+!!$    REAL(KIND=8), PARAMETER :: x0 = 0.015d0 !x0=0.1 (cubic threshold)
+    !integer :: i
+    !do i = 1, mesh%np
+    !   x(i) = (i-1.d0)/mesh%np
+    !end do
+    !===Quadratic threshold
+    z = x-x0
+    zp = x-2*x0
+    relu = (zp+abs(zp))/2
+    f = -z*(z**2-x1**2)  + relu*(z-x0)*(z+2*x0)
+    g = (f + 2*x0**3)/(4*x0**3)
+    !!CALL plot_1d(x,g,'threshold1.plt') 
+
+    !===Cubic threshold
+!!$    relu = ((x-2*x0)+abs(x-2*x0))/2
+!!$    t = x/(2*x0)
+!!$    g = t**3*(10-15*t+6*t**2) - relu*(t-1)**2*(6*t**2+3*t+1)/(2*x0)
 
     !CALL plot_1d(x,g,'threshold2.plt') 
     !stop
@@ -825,7 +801,7 @@ CONTAINS
 
     !rescale =MAX(ABS(maxn-minn)/2, inputs%gravity*inputs%htiny**2)
     !rescale =MAX(ABS(maxn-minn)/2,inputs%epsilon_htiny*maxn)
-    rescale =MAX(ABS(maxn-minn)/2, small_rescale)
+    rescale = MAX(ABS(maxn-minn)/2, small_rescale)
     res = ABS(res)/rescale
     !===TEST
     !DO i = 1, mesh%np
@@ -838,7 +814,8 @@ CONTAINS
        DO p = mass%ia(i), mass%ia(i+1) - 1
           j = mass%ja(p)
           IF (i==j) CYCLE
-          dijH%aa(p) = dijL%aa(p)*min(1.d0,max(res(i),res(j)))
+          !REF dijH%aa(p) = dijL%aa(p)*min(1.d0,max(res(i),res(j)))
+          dijH%aa(p) = dijL%aa(p)*min(1.d0,(res(i)+res(j))/2)
        END DO
     END DO
     IF (inputs%time+inputs%dt.GE.inputs%Tfinal) THEN

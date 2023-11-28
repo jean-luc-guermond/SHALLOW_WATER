@@ -49,7 +49,7 @@ CONTAINS
     INTEGER, PARAMETER           :: in_unit=21
     CHARACTER(len=*), INTENT(IN) :: data_fichier
     LOGICAL :: okay
-    inputs%epsilon_tiny     = 1.d-8!==htiny
+    inputs%epsilon_tiny     = 1.d-10!==htiny
     OPEN(UNIT = in_unit, FILE = data_fichier, FORM = 'formatted', STATUS = 'unknown')
     CALL read_until(in_unit, "===Name of directory for mesh file===") 
     READ (in_unit,*) inputs%directory
