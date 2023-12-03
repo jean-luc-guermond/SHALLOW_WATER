@@ -36,7 +36,6 @@ CONTAINS
     REAL(KIND=8), DIMENSION(k_dim) :: x
     LOGICAL, DIMENSION(mesh%np) :: if_udotn_zero
 
-
     !===Mass
     CALL compute_mass(mesh,mass)
 
@@ -163,6 +162,7 @@ CONTAINS
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size) :: un_in
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size,ERK%s+1) :: un
     INTEGER  :: stage
+
     un(:,:,1) = un_in
     DO stage = 2, ERK%s+1
        CALL one_stage_ERK(stage,un)
@@ -192,6 +192,19 @@ CONTAINS
 
     SELECT CASE(inputs%method_type)
     CASE('galerkin')
+       velocity = compute_velocity(un(:,:,stage_prime))
+       CALL compute_inviscid_high_order_flux(un(:,:,stage-1),fluxij)
+       DO comp = 1, inputs%syst_size
+          fluxij_High(comp,stage-1)%aa = fluxij(comp)%aa
+          fluxijH(comp)%aa=0.d0
+          DO l = 1, stage-1
+             fluxijH(comp)%aa = fluxijH(comp)%aa+ERK%MatRK(stage,l)*fluxij_High(comp,l)%aa
+          END DO
+       END DO
+       CALL sum_flux(fluxijH,rk)
+       CALL divide_by_lumped(inputs%if_lumped,rk)
+       un(:,:,stage) = un(:,:,stage_prime)+inputs%dt*rk !===Unlimited high-order solution
+       CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
        RETURN
     CASE('viscous')
        velocity = compute_velocity(un(:,:,stage_prime))
@@ -201,11 +214,10 @@ CONTAINS
        !===TEST
        CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,lumped,diag,un(:,:,stage_prime))
        CALL sum_flux(FluxijL,rk)
-       CALL divide_by_lumped(.true.,rk)
+       CALL divide_by_lumped(.TRUE.,rk)
        un(:,:,stage) = un(:,:,stage_prime)+ERK%inc_C(stage)*inputs%dt*rk
        CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
        RETURN
-
     CASE('high')
        !===Best result obtained without smoothness indicator (both low order and high order)
        !===Low-order update
@@ -222,13 +234,12 @@ CONTAINS
           fluxijL(comp)%aa = ERK%inc_C(stage)*fluxijL(comp)%aa
        END DO
        CALL sum_flux(FluxijL,rk)
-       CALL divide_by_lumped(.true.,rk)
+       CALL divide_by_lumped(.TRUE.,rk)
        ulow = un(:,:,stage_prime)+inputs%dt*rk
        !===TEST
        !WRITE(*,*) ' test', MAXVAL(ABS(ulow-uhigh))
        !STOP
        !===TEST
-
        !===High-order update
        CALL compute_inviscid_high_order_flux(un(:,:,stage-1),fluxij)
        DO comp = 1, inputs%syst_size
@@ -238,11 +249,11 @@ CONTAINS
              fluxijH(comp)%aa = fluxijH(comp)%aa+ERK%MatRK(stage,l)*fluxij_High(comp,l)%aa
           END DO
        END DO
-       CALL compute_muijL
-       !CALL entropy_residual(un(:,:,stage-1)) !===Entropy residual at stage-1
+       !CALL compute_muijL
+       CALL entropy_residual(un(:,:,stage-1)) !===Entropy residual at stage-1
        !CALL smoothness(un(:,1,stage_prime),dijL,dijH)
-       CALL entropy_commutator(un(:,:,stage-1))
-       
+       !CALL entropy_commutator(un(:,:,stage-1))
+       !dijH%aa =0.d0
        CALL add_visc_to_high_flux(dijH,fluxijH,ERK%inc_C(stage),un(:,:,stage_prime))
        CALL sum_flux(fluxijH,rk)
 
@@ -287,7 +298,7 @@ CONTAINS
        !===TEST
        CALL compute_bounds_and_low_flux(ERK%inc_C(stage)*inputs%dt,velocity,dijL,cij,FluxijL,lumped,diag,un(:,:,stage_prime))
        CALL sum_flux(FluxijL,rk)
-       CALL divide_by_lumped(.true.,rk)
+       CALL divide_by_lumped(.TRUE.,rk)
        un(:,:,stage) = un(:,:,stage_prime)+ERK%inc_C(stage)*inputs%dt*rk
 
        CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
@@ -303,7 +314,7 @@ CONTAINS
             lumped,diag,un(:,:,stage_prime))
        CALL sum_flux(FluxijL,rk)
        rk = rk + SL
-       CALL divide_by_lumped(.true.,rk)
+       CALL divide_by_lumped(.TRUE.,rk)
        un(:,:,stage) = un(:,:,stage_prime)+ERK%inc_C(stage)*inputs%dt*rk 
 
        CALL bdy(un(:,:,stage),time_stage)!===Enforce boundary condition
@@ -324,7 +335,7 @@ CONTAINS
        END DO
        CALL sum_flux(FluxijL,rk)
        rk = rk + SL
-       CALL divide_by_lumped(.true.,rk)
+       CALL divide_by_lumped(.TRUE.,rk)
        ulow = un(:,:,stage_prime)+inputs%dt*rk 
 
        !===High-order update
@@ -358,7 +369,7 @@ CONTAINS
           !     FluxijH,FluxijL,mass,lumped,diag,opt_src_shift=Source_shift)
           CALL convex_limiting_proc(velocity,un(:,:,stage_prime),ulow,un(:,:,stage),&
               FluxijH,FluxijL,mass,lumped,diag)
-          CALL divide_by_lumped(.true.,source_shift)
+          CALL divide_by_lumped(.TRUE.,source_shift)
           un(:,:,stage) = un(:,:,stage) + inputs%dt*source_shift
        ELSE
           rk = rk + Source_shift
@@ -512,10 +523,11 @@ CONTAINS
     REAL(KIND=8) :: xx, yy, aa, bb, small_ent, small_rescale, global_rescale
     INTEGER :: k, i, j, p
 
-    small_ent =(inputs%gravity*inputs%max_water_h)**(1.5)*inputs%max_water_h
-    global_rescale = MAXVAL(ABS(cij(1)%aa))*small_ent
+    small_ent =SQRT(inputs%gravity*inputs%max_water_h)*(inputs%gravity*inputs%max_water_h**2)
+    global_rescale = inputs%max_water_h**(k_dim-1)*small_ent 
     small_rescale = inputs%epsilon_tiny*global_rescale
-    
+    !small_rescale = 1.d-7*global_rescale
+
     scal = inputs%gravity*un(:,1)**2
     !scal = scal + inputs%gravity*un(:,1)*bath !===eta+ghz ***(entropy with bathymetry)
     DO k = 1, k_dim
@@ -555,9 +567,9 @@ CONTAINS
        rescale(i) = ABS(aa)+ABS(bb)
     END DO
     res = ABS(res)/(rescale+small_rescale)
- 
+
     !DO i = 1, mesh%np
-    !   IF (un(i,1).LE.inputs%htiny) res(i) = 1.d0 
+    !   IF (un(i,1).LE.inputs%hsmall) res(i) = 1.d0
     !END DO
 
     !===Thresholding is bad without limiting, subcritical test
@@ -569,7 +581,7 @@ CONTAINS
           j = dijL%ja(p)
           IF (i==j) CYCLE
           !dijH%aa(p) = dijL%aa(p)*min(1.d0,max(res(i),res(j)))
-          dijH%aa(p) = dijL%aa(p)*min(1.d0,(res(i)+res(j))/2)
+          dijH%aa(p) = dijL%aa(p)*MIN(1.d0,(res(i)+res(j))/2)
        END DO
     END DO
 
@@ -589,8 +601,8 @@ CONTAINS
     USE sub_plot
     IMPLICIT NONE
     REAL(KIND=8), DIMENSION(mesh%np)  :: x, z, t, zp, relu, f, g
-    REAL(KIND=8), PARAMETER :: x0 = 0.05d0, x1=SQRT(3.d0)*x0 !x0=0.05 good for P1 (qudratic threshold)
-!!$    REAL(KIND=8), PARAMETER :: x0 = 0.015d0 !x0=0.1 (cubic threshold)
+    REAL(KIND=8), PARAMETER :: x0 = 0.05d0, x1=SQRT(3.d0)*x0 !x0=0.05 good for P1 (quadratic threshold)
+!!$    REAL(KIND=8), PARAMETER :: x0 = 0.5d0 !x0=0.1 (cubic threshold)
     !integer :: i
     !do i = 1, mesh%np
     !   x(i) = (i-1.d0)/mesh%np
@@ -598,7 +610,7 @@ CONTAINS
     !===Quadratic threshold
     z = x-x0
     zp = x-2*x0
-    relu = (zp+abs(zp))/2
+    relu = (zp+ABS(zp))/2
     f = -z*(z**2-x1**2)  + relu*(z-x0)*(z+2*x0)
     g = (f + 2*x0**3)/(4*x0**3)
     !!CALL plot_1d(x,g,'threshold1.plt') 
@@ -719,7 +731,7 @@ CONTAINS
           j = stiff%ja(p)
           IF (i==j) CYCLE
           num(i) = num(i)     + stiff%aa(p)*(waterh(i) - waterh(j))
-          denom(i) = denom(i) + abs(stiff%aa(p))*ABS(abs(waterh(i) - waterh(j))+inputs%htiny)
+          denom(i) = denom(i) + ABS(stiff%aa(p))*ABS(ABS(waterh(i) - waterh(j))+inputs%htiny)
        END DO
        alpha(i) = ABS(num(i)/denom(i))**2
     END DO
@@ -730,7 +742,7 @@ CONTAINS
              dij_out%aa(p) =0.d0
           ELSE
              !dij_out%aa(p) = ((alpha(i)+alpha(j))/2)*dij_in%aa(p)
-             dij_out%aa(p) = max(alpha(i),alpha(j))*dij_in%aa(p)
+             dij_out%aa(p) = MAX(alpha(i),alpha(j))*dij_in%aa(p)
           END IF
        END DO
     END DO
@@ -750,8 +762,13 @@ CONTAINS
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size,k_dim) :: ff
     REAL(KIND=8), DIMENSION(mesh%np,inputs%syst_size)       :: Entprime
     REAL(KIND=8), DIMENSION(mesh%np,k_dim)                  :: ent_flux
-    REAL(KIND=8) :: xx, yy, small_ent, small_rescale
+    REAL(KIND=8) :: xx, yy, small_ent, small_rescale, global_rescale 
     INTEGER :: k, i, j, p
+
+    !===TEST
+    global_rescale = MAXVAL(ABS(cij(1)%aa))*SQRT(inputs%gravity*inputs%max_water_h)
+    !===TEST
+    
 
     small_ent = 1.d-10*inputs%gravity*inputs%max_water_h*inputs%max_water_h
     small_rescale = MAXVAL(ABS(cij(1)%aa))*small_ent
@@ -799,23 +816,23 @@ CONTAINS
  
     END DO
 
-    !rescale =MAX(ABS(maxn-minn)/2, inputs%gravity*inputs%htiny**2)
-    !rescale =MAX(ABS(maxn-minn)/2,inputs%epsilon_htiny*maxn)
-    rescale = MAX(ABS(maxn-minn)/2, small_rescale)
+
+    !rescale = MAX(ABS(maxn-minn), small_rescale) * global_rescale !===Should be correct
+    rescale = MAX(ABS(maxn-minn)/2, small_rescale) 
     res = ABS(res)/rescale
     !===TEST
     !DO i = 1, mesh%np
     !   if (un(i,1).LE. inputs%htiny) res(i)=1.d0
     !END DO
     !===TEST
-    !res = threshold(res)
+    res = threshold(res)
 
     DO i = 1, mesh%np
        DO p = mass%ia(i), mass%ia(i+1) - 1
           j = mass%ja(p)
           IF (i==j) CYCLE
           !REF dijH%aa(p) = dijL%aa(p)*min(1.d0,max(res(i),res(j)))
-          dijH%aa(p) = dijL%aa(p)*min(1.d0,(res(i)+res(j))/2)
+          dijH%aa(p) = dijL%aa(p)*MIN(1.d0,(res(i)+res(j))/2)
        END DO
     END DO
     IF (inputs%time+inputs%dt.GE.inputs%Tfinal) THEN
@@ -854,7 +871,7 @@ CONTAINS
     !===Compute first-order viscosity
     CALL compute_dijL(un)
     CALL smb_1(un,rk)
-    CALL divide_by_lumped(.true.,rk)
+    CALL divide_by_lumped(.TRUE.,rk)
 
     !===Compute First-Order solution
     unext = un+inputs%dt*rk
@@ -954,7 +971,7 @@ CONTAINS
           WRITE(*,*) 'MAXVAL(vel)', MAXVAL(ABS(velocity(:,1))), MAXVAL(ABS(velocity(:,k_dim)))
           CALL plot_scalar_field(mesh%jj, mesh%rr, h(:,1), 'h.plt')
           CALL plot_scalar_field(mesh%jj, mesh%rr, velocity(:,1), 'vx.plt')
-          if (k_dim==2) CALL plot_scalar_field(mesh%jj, mesh%rr, velocity(:,2), 'vy.plt')
+          IF (k_dim==2) CALL plot_scalar_field(mesh%jj, mesh%rr, velocity(:,2), 'vy.plt')
           STOP
        END IF
     END DO

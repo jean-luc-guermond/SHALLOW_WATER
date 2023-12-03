@@ -11,7 +11,7 @@ MODULE problem_setup
   REAL(KIND=8), DIMENSION(:), ALLOCATABLE :: bath
   !===For problem specific constants that are read in 'parameters.in' file
   TYPE my_parameters
-     REAL(KIND=8) :: Hinfty, r0, beta, x0(k_dim), vinfty(k_dim), a
+     REAL(KIND=8) :: Hinfty, r0, beta, x0(k_dim), vinfty(k_dim)
   END TYPE my_parameters
   TYPE(my_parameters), PUBLIC :: parameters
 CONTAINS
@@ -30,7 +30,6 @@ CONTAINS
     a2 = MAXVAL(x2)
 
     !===Define bathymetry
-    !vv = parameters%a*parameters%Hinfty*(x2/a2)
     vv = 0.d0
   END FUNCTION bath_function
 
@@ -104,7 +103,6 @@ CONTAINS
 
     !===Define constants
     inputs%gravity= 9.81d0
-    parameters%a= 0.5d0
     parameters%Hinfty = 1.d0
     parameters%r0 = 1.d0
     parameters%beta = 2.d0

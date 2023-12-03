@@ -31,7 +31,7 @@ MODULE input_data
 
      REAL(KIND=8)                   :: epsilon_tiny
      REAL(KIND=8)                   :: max_water_h
-     REAL(KIND=8)                   :: htiny
+     REAL(KIND=8)                   :: htiny, hsmall
 
      LOGICAL                        :: if_lumped
      LOGICAL                        :: if_friction

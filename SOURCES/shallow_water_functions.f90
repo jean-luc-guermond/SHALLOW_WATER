@@ -38,8 +38,8 @@ CONTAINS
     IMPLICIT NONE
     REAL(KIND=8), DIMENSION(mesh%np) :: un
     REAL(KIND=8), DIMENSION(mesh%np) :: vv
-    !vv = 2*max(un,0.d0)/(un**2+max(un,inputs%htiny)**2)
-    vv = 4*max(un,0.d0)**3/(un**2+max(un,inputs%htiny)**2)**2
+    vv = 2*max(un,0.d0)/(un**2+max(un,inputs%htiny)**2)
+    !vv = 4*max(un,0.d0)**3/(un**2+max(un,inputs%htiny)**2)**2
   END FUNCTION compute_one_over_h
 
   SUBROUTINE compute_lambda_vacc(ul,ur,vell,velr,nij,lambda)

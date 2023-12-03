@@ -9,10 +9,12 @@ MODULE IDP_limiting_shallow_water
   PRIVATE
   LOGICAL :: once_bounds=.TRUE., once_limiting=.TRUE.
   REAL(KIND=8), DIMENSION(:), POINTER   :: vel2max, hmin, hmax, Kinmax, Q2max
+  REAL(KIND=8), POINTER, DIMENSION(:)   :: hsmall 
   TYPE(matrice_bloc)                    :: mc_minus_ml, lij, stiff
   TYPE(matrice_bloc), DIMENSION(k_dim+1):: fctmat
   REAL(KIND=8), DIMENSION(:),   POINTER :: relaxi
   INTEGER, PARAMETER                    :: it_max_limiting = 2
+  REAL(KIND=8), PARAMETER :: epsilon_hsmall = 0.01d0
 CONTAINS
   SUBROUTINE compute_bounds_and_low_flux(dt,velocity,dijL,cij,FluxijL,lumped,diag,un,opt_utest)
     IMPLICIT NONE
@@ -364,9 +366,6 @@ CONTAINS
        END IF
     END DO
     unext = ulow
-
-
-
     !===End of computation
 
   END SUBROUTINE convex_limiting_proc
@@ -423,6 +422,13 @@ CONTAINS
     TYPE(matrice_bloc),         INTENT(OUT)  :: lij
     REAL(KIND=8) :: maxni, minni, ui, uij, xij, lambdai, usmall
     INTEGER      :: i, j, p
+    LOGICAL, SAVE :: once=.true.
+  
+    IF (once) THEN
+       ALLOCATE(hsmall(mesh%np))
+       hsmall = epsilon_hsmall*nondim_meshsize_loc*inputs%max_water_h
+       once = .false.
+    END IF
 
     !===Compute lij
     usmall = inputs%htiny
@@ -439,8 +445,9 @@ CONTAINS
           IF(i==j) CYCLE !===Skip diagonal term
           xij = mat%aa(p)/(mass(i)*lambdai)
           uij = ui + xij
-          IF (uij.LE. inputs%htiny) THEN
-             lij%aa(p) = 0.d0
+          !IF (uij.LE. inputs%htiny) THEN
+          IF (uij.LE.hsmall(i)) THEN
+             lij%aa(p) = 0.d0 !threshold(uij/hsmall(i))
           ELSE IF (uij<minni) THEN
              lij%aa(p) = MIN(ABS(minni - ui)/(ABS(xij)+usmall),1.d0)
           ELSE IF (uij>maxni) THEN
@@ -451,6 +458,50 @@ CONTAINS
 
     !lij%aa(diag) = 0.d0 !===Skip diagonal term
   END SUBROUTINE LOCAL_limit
+
+  FUNCTION threshold(x) RESULT(g)
+    USE mesh_handling
+    USE sub_plot
+    IMPLICIT NONE
+
+    REAL(KIND=8)  :: x, z, t, zp, relu, f, g
+    REAL(KIND=8), PARAMETER :: x0 = 0.25d0, x1=SQRT(3.d0)*x0 !x0=0.05 good for P1 (quadratic threshold)
+!!$    REAL(KIND=8), PARAMETER :: x0 = 0.015d0 !x0=0.1 (cubic threshold)
+
+!!$    REAL(KIND=8), DIMENSION(mesh%np)  :: xx, gg   
+!!$    integer :: i
+!!$    do i = 1, mesh%np
+!!$       xx(i) = (i-1.d0)/mesh%np -1+2*x0
+!!$       z = xx(i)-x0
+!!$       zp = xx(i)-2*x0
+!!$       relu = (zp+ABS(zp))/2
+!!$       f = -z*(z**2-x1**2)  + relu*(z-x0)*(z+2*x0)
+!!$       gg(i) = max((f + 2*x0**3)/(4*x0**3),0.d0)
+!!$       if (xx(i).le.0.d0) gg(i) =0.d0
+!!$    end do
+!!$    CALL plot_1d(xx,gg,'threshold1.plt') 
+!!$    stop
+    !===Quadratic threshold
+    x = x - 1+2*x0
+    if (x.le.0.d0) THEN
+       g =0.d0
+    ELSE
+       z = x-x0   
+       zp = x-2*x0
+       relu = (zp+ABS(zp))/2
+       f = -z*(z**2-x1**2)  + relu*(z-x0)*(z+2*x0)
+       g = (f + 2*x0**3)/(4*x0**3)
+    END iF
+
+    !===Cubic threshold
+!!$    relu = ((x-2*x0)+abs(x-2*x0))/2
+!!$    t = x/(2*x0)
+!!$    g = t**3*(10-15*t+6*t**2) - relu*(t-1)**2*(6*t**2+3*t+1)/(2*x0)
+
+    !CALL plot_1d(x,g,'threshold2.plt') 
+    !stop
+    RETURN
+  END FUNCTION threshold
 
   SUBROUTINE quadratic_limiting(ulow,lumped,v2max)
     USE mesh_handling
